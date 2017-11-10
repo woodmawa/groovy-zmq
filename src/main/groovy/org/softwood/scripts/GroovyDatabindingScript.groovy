@@ -116,6 +116,7 @@ class Binder {
 
         def sourcePropsList = []
         //find properties that don't contain 'class'
+        //todo add the prefix check as filter
         def targetPropsList = target.metaClass.properties.findAll { !(it.name =~ /.*(C|c)lass.*/) }
         //todo def targetStaticProps = target.metaClass.properties.findAll{ it.getter.static }
 
