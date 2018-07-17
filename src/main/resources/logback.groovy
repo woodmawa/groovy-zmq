@@ -3,7 +3,7 @@
  */
 
 
-import org.springframework.boot.ApplicationPid
+import org.springframework.boot.system.ApplicationPid
 
 import java.nio.charset.Charset
 

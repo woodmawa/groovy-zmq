@@ -20,7 +20,7 @@ server = new Server ()
 
 t1 = Thread.start {
     println "start client on new thread "
-    client.codec('json').requestConnection("", [:]) {gzmq ->
+    client.codec('java').requestConnection("", [:]) {gzmq ->
         println "client sends message .."
         gzmq.send "Hello Will"
 
@@ -33,7 +33,7 @@ t1 = Thread.start {
 
 t2 = Thread.start {
     println "start server on new thread "
-    server.codec('json').replyConnection("", [complete:true]) {gzmq ->
+    server.codec('java').replyConnection("", [complete:true]) {gzmq ->
         //read 1 message from socket
         byte[] request
         gzmq.receive({request = it })

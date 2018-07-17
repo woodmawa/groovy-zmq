@@ -10,6 +10,7 @@ import sun.security.pkcs11.Secmod
 
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
 
 
 /**
@@ -39,14 +40,16 @@ trait GzmqTrait {
     Agent<ZMQ.Socket> socketAgent = new Agent(null)
     Closure encode
     Closure decode
-    static jsonConf = FSTConfiguration.createJsonConfiguration(true,false)
+    //static jsonConf = FSTConfiguration.cre//FSTConfiguration.createJsonConfiguration(true,false)
     static javaConf = FSTConfiguration.createDefaultConfiguration()
-    static minBinConf = FSTConfiguration.createMinBinConfiguration()
-    static final Map codecs = [json: [encode: jsonConf.&asByteArray, decode: jsonConf.&asObject],
+    //static minBinConf = FSTConfiguration.createMinBinConfiguration()
+    static final Map codecs = [/*json: [encode: jsonConf.&asByteArray, decode: jsonConf.&asObject], */
                                 java: [encode: javaConf.&asByteArray, decode: javaConf.&asObject],
-                                minBin: [encode: minBinConf.&asByteArray, decode: minBinConf.&asObject],
+                                /* minBin: [encode: minBinConf.&asByteArray, decode: minBinConf.&asObject], */
                                 none: [encode : {it}], decode: {it} ]
-    volatile boolean codecEnabled = false
+
+    AtomicBoolean codecEnabled = new AtomicBoolean(false)
+
     Timer timer
     int delay, frequency, finish
     volatile boolean timerEnabled = false
@@ -197,16 +200,16 @@ trait GzmqTrait {
     def codec (type) {
         def codecType
         switch (type) {
-            case 'json' : codecType = 'json'; break
+            //case 'json' : codecType = 'json'; break
             case 'java' : codecType = 'java';break
-            case 'minBin': codecType = 'minBin';break
+            //case 'minBin': codecType = 'minBin';break
             case 'none': codecType = 'none'; break
-            default: codecType = 'json'; break
+            default: codecType = 'java'; break
         }
 
         encode = (codecs[codecType])['encode']
         decode = (codecs[codecType])['decode']
-        codecEnabled = (type != 'none') ? true : false
+        codecEnabled.getAndSet( (type != 'none') ? true : false )
         this
     }
 
@@ -346,7 +349,7 @@ trait GzmqTrait {
             context = new ZContext(poolSize)
 
         def socketType = options.'socketType'
-        assert socketType
+        //assert socketType
         options.remove('socketType')
         def protocol = options.'protocol' ?: DEFAULT_PROTOCOL
         options.remove ('protocol')

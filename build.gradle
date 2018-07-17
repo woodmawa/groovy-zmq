@@ -16,7 +16,10 @@ dependencies {
     compile group: 'com.fasterxml.jackson.core', name: 'jackson-databind', version: '2.8.9'
     compile group: 'org.codehaus.gpars', name: 'gpars', version: '1.2.1'
     //fast serialisation
-    compile group: 'de.ruedigermoeller', name: 'fst', version: '2.50'
+    compile group: 'org.springframework.boot', name: 'spring-boot', version: '2.0.3.RELEASE'
+    // serialisation libray capability : https://mvnrepository.com/artifact/de.ruedigermoeller/fst
+    compile group: 'de.ruedigermoeller', name: 'fst', version: '2.00'
+
 
     //add Logback
     compile 'ch.qos.logback:logback-classic:1.2.3'
