@@ -85,11 +85,12 @@ trait GzmqTrait {
         return "${socketProtocol}://${socketHost}:${socketPort}"  //todo regex processing for host string
     }
 
+
     /**
      * if no context exists - it will create one and store it on the class instance in the trait.
      *
-     * The configure function will build and configure a socket of the appropriate named type and store that
-     * in an agent to assure thread safety for the socket.
+     * The _createConnection function will build and configure a socket of the appropriate named type and store that
+     * in an agent to assure thread safety for the socket.  ZContext also stores list of contexts created on  it
      * Need to look very carefully at the whole thread journey and not get things mixed
      *
      * interface is functionally oriented so that calls can be chained
@@ -101,12 +102,12 @@ trait GzmqTrait {
      * @param options - map of overidde values should any be provided
      * @return
      */
-    def configure (String socketType, String protocol = "tcp", String host = "localhost", String port = "5555", Map options = [:]) {
+    def _createConnection (String socketType, String protocol = "tcp", String host = "localhost", String port = "5555", Map options = [:]) {
         long poolSize = options.'poolSize' ?: defaultOptionsMap.poolSize
         if (!context)
             context = new ZContext (poolSize)
 
-        log.debug "configure: configure connection for socket "
+        log.debug "_createConnection: configure connection for socket "
         def connectionAddress = _getConnectionAddress(protocol, host, port, options)  //todo regex processing for host string
 
         def sockType
