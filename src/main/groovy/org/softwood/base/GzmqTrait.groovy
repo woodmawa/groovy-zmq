@@ -54,12 +54,12 @@ trait GzmqTrait {
     Agent<ZMQ.Socket> socketAgent = new Agent(null)
     Closure encode
     Closure decode
-    //static jsonConf = FSTConfiguration.cre//FSTConfiguration.createJsonConfiguration(true,false)
+    static jsonConf = FSTConfiguration.c//FSTConfiguration.createJsonConfiguration(true,false)
     static javaConf = FSTConfiguration.createDefaultConfiguration()
-    //static minBinConf = FSTConfiguration.createMinBinConfiguration()
-    static final Map codecs = [/*json: [encode: jsonConf.&asByteArray, decode: jsonConf.&asObject], */
+    static minBinConf = FSTConfiguration.createMinBinConfiguration()
+    static final Map codecs = [json: [encode: jsonConf.&asByteArray, decode: jsonConf.&asObject],
                                 java: [encode: javaConf.&asByteArray, decode: javaConf.&asObject],
-                                /* minBin: [encode: minBinConf.&asByteArray, decode: minBinConf.&asObject], */
+                                minBin: [encode: minBinConf.&asByteArray, decode: minBinConf.&asObject],
                                 none: [encode : {it}], decode: {it} ]
 
     AtomicBoolean codecEnabled = new AtomicBoolean(false)
@@ -246,10 +246,10 @@ trait GzmqTrait {
 
     def codec (type) {
         def codecType
-        switch (type) {
-            //case 'json' : codecType = 'json'; break
+        switch (type.toLowerCase()) {
+            case 'json' : codecType = 'json'; break
             case 'java' : codecType = 'java';break
-            //case 'minBin': codecType = 'minBin';break
+            case 'minBin': codecType = 'minBin';break
             case 'none': codecType = 'none'; break
             default: codecType = 'java'; break
         }

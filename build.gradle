@@ -18,7 +18,7 @@ dependencies {
     //fast serialisation
     compile group: 'org.springframework.boot', name: 'spring-boot', version: '2.0.3.RELEASE'
     // serialisation library capability : https://mvnrepository.com/artifact/de.ruedigermoeller/fst
-    compile group: 'de.ruedigermoeller', name: 'fst', version: '2.00'
+    compile group: 'de.ruedigermoeller', name: 'fst', version: '2.57'
 
 
     //add Logback
