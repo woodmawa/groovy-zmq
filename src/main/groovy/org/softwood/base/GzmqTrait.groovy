@@ -29,8 +29,22 @@ trait GzmqTrait {
     static final long DEFAULT_PORT = 5555
     static final String DEFAULT_SUBSCRIBE_ALL = ''
 
-    //user high level api
-    //ZMQ.Context context  //context is thread safe, sockets are not
+    /**
+     * internal initial default options map using above
+     */
+    private final Map defaultOptionsMap = [
+            poolSize: DEFAULT_POOL_SIZE,
+            protocol:DEFAULT_PROTOCOL,
+            host:DEFAULT_HOST,
+            port: DEFAULT_PORT,
+            subscription: DEFAULT_SUBSCRIBE_ALL]
+
+    /**
+     * user high level api
+     * context is thread safe, sockets are not
+     * It manages open sockets in the context and automatically closes these before terminating the context
+     * Sets-up signal (interrupt) handling for the process.
+     */
     ZContext context  //holds list of sockets it creates
 
     ConcurrentLinkedQueue errors = []
@@ -54,17 +68,50 @@ trait GzmqTrait {
     int delay, frequency, finish
     volatile boolean timerEnabled = false
 
+    private String _getConnectionAddress ( String protocol = "tcp", String host = "localhost", String port = "5555", Map options = [:]) {
+
+        def socketProtocol = protocol
+        def socketHost = host
+        def socketPort = port
+
+        if (options.hasProperty("protocol"))
+            socketProtocol = options.protocol  // override from options if it exists
+        if (options.hasProperty("host"))
+            socketProtocol = options.host  // override from options if it exists
+        if (options.hasProperty("port"))
+            socketProtocol = options.port  // override from options if it exists
+
+        //build connection address string
+        return "${socketProtocol}://${socketHost}:${socketPort}"  //todo regex processing for host string
+    }
+
+    /**
+     * if no context exists - it will create one and store it on the class instance in the trait.
+     *
+     * The configure function will build and configure a socket of the appropriate named type and store that
+     * in an agent to assure thread safety for the socket.
+     * Need to look very carefully at the whole thread journey and not get things mixed
+     *
+     * interface is functionally oriented so that calls can be chained
+     *
+     * @param socketType - string of type of socket you want to create - automatically sets assumed endpoint type for the socket  of 'client' or 'server'
+     * @param protocol
+     * @param host
+     * @param port
+     * @param options - map of overidde values should any be provided
+     * @return
+     */
     def configure (String socketType, String protocol = "tcp", String host = "localhost", String port = "5555", Map options = [:]) {
-        long poolSize = options.'poolSize' ?: DEFAULT_POOL_SIZE
+        long poolSize = options.'poolSize' ?: defaultOptionsMap.poolSize
         if (!context)
-            //context = ZMQ.context(poolSize)
             context = new ZContext (poolSize)
 
-        println "configure connection for socket "
-        def connectionAddress = "${protocol}://${host}:${port}"  //todo regex processing for host string
+        log.debug "configure: configure connection for socket "
+        def connectionAddress = _getConnectionAddress(protocol, host, port, options)  //todo regex processing for host string
+
         def sockType
         def endpoint = ""
-        switch (socketType) {
+        switch (socketType.toUpperCase()) {
             case "REQ" : sockType = ZMQ.REQ ; endpoint = "client"; break
             case "REP" : sockType = ZMQ.REP; endpoint = "server"; break;  //XREP
             case "PUB" : sockType = ZMQ.PUB; endpoint = "client";break
@@ -75,18 +122,18 @@ trait GzmqTrait {
         }
         //if endpoint is declared override
         def optEndpoint = options.'endpoint'
-        endpoint =  optEndpoint ?: 'client'  //default to client - i.e connect socket
+        endpoint =  optEndpoint ?: 'client'  //default for a client - i.e connect socket
 
         //get the socket
         //ZMQ.Socket socketInstance = context.createSocket(sockType)
         ZMQ.Socket socketInstance = context.createSocket(sockType)
-        //and either connect as client or as server
+        //and either 'connect' as client or 'bind' as server.  default of 'connect' is assumed
         switch (endpoint) {
             case "client" : socketInstance.connect (connectionAddress); break
             case "server" : socketInstance.bind (connectionAddress); break
             default: socketInstance.connect (connectionAddress); break
         }
-        socketAgent.updateValue(socketInstance)
+        socketAgent.updateValue(socketInstance)  // is this not supposed to send message to effect this.
         this
     }
 
