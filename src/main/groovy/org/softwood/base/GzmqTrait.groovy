@@ -16,7 +16,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Created by willw on 30/06/2017.
  *
- * implemented as a trait, can be implemented in any client class
+ * implemented as a trait, can be implemented by any client class
+ * essentialy builds a ZMQ socket of required type and maintains access
+ * to the socket through GPARs Agent.  Uses higher level API ZContext to
+ * create sockets.  ZContext maintains mutux List of sockets created in
+ * this context instance
  * assumes instance of client class has been created either by new, or factory method
  *
  */
@@ -30,7 +34,8 @@ trait GzmqTrait {
     static final String DEFAULT_SUBSCRIBE_ALL = ''
 
     /**
-     * internal initial default options map using above
+     * internal initial default options map using above.  Instance is
+     * final but values may be added/removed
      */
     private final Map defaultOptionsMap = [
             poolSize: DEFAULT_POOL_SIZE,
@@ -50,11 +55,14 @@ trait GzmqTrait {
     ConcurrentLinkedQueue errors = []
 
     //make socket thread safe
-    //Agent<ZMQ.Socket> socketAgent = new Agent(null)
+    //todo remove single socket cosntraint - Gzmq instace can have more than 1 socket?
     Agent<ZMQ.Socket> socketAgent = new Agent(null)
+
+    //setup codecs for various serialisation options using FST library
+    //codecs map sets up closures for each serialisation type
     Closure encode
     Closure decode
-    static jsonConf = FSTConfiguration.c//FSTConfiguration.createJsonConfiguration(true,false)
+    static jsonConf = FSTConfiguration.createJsonConfiguration(true,false)
     static javaConf = FSTConfiguration.createDefaultConfiguration()
     static minBinConf = FSTConfiguration.createMinBinConfiguration()
     static final Map codecs = [json: [encode: jsonConf.&asByteArray, decode: jsonConf.&asObject],
@@ -62,13 +70,23 @@ trait GzmqTrait {
                                 minBin: [encode: minBinConf.&asByteArray, decode: minBinConf.&asObject],
                                 none: [encode : {it}], decode: {it} ]
 
+    //by default codecs are not assumed so values will be passed to
+    //send methods as is - therefore types must support getByteArray method
     AtomicBoolean codecEnabled = new AtomicBoolean(false)
 
     Timer timer
     int delay, frequency, finish
-    volatile boolean timerEnabled = false
+    volatile boolean timerEnabled = false  //ensure we cross memory boundary
 
-    private String _getConnectionAddress ( String protocol = "tcp", String host = "localhost", String port = "5555", Map options = [:]) {
+    /**
+     * constructs a connection address by concatenating
+     * @param protocol - typically tcp assumed
+     * @param host
+     * @param port
+     * @param options - map of any ovveride options
+     * @return formatted connection string
+     */
+    private String _getConnectionAddress ( String protocol = "tcp", String host = "localhost", def port = 5555, Map options = [:]) {
 
         def socketProtocol = protocol
         def socketHost = host
@@ -79,7 +97,7 @@ trait GzmqTrait {
         if (options.hasProperty("host"))
             socketProtocol = options.host  // override from options if it exists
         if (options.hasProperty("port"))
-            socketProtocol = options.port  // override from options if it exists
+            socketPort = options.port  // override from options if it exists
 
         //build connection address string
         return "${socketProtocol}://${socketHost}:${socketPort}"  //todo regex processing for host string
@@ -102,12 +120,16 @@ trait GzmqTrait {
      * @param options - map of overidde values should any be provided
      * @return
      */
-    def _createConnection (String socketType, String protocol = "tcp", String host = "localhost", String port = "5555", Map options = [:]) {
-        long poolSize = options.'poolSize' ?: defaultOptionsMap.poolSize
-        if (!context)
+    private def _createConnection (String socketType, String protocol = "tcp", String host = "localhost", def port = 5555, Map options = [:]) {
+        int poolSize = options.'poolSize' ?: defaultOptionsMap.poolSize
+        if (!context) {
             context = new ZContext (poolSize)
+        }
 
-        log.debug "_createConnection: configure connection for socket "
+        if (port instanceof String)
+            port = Long.parseLong(port)
+
+        //no log on impl cl\ass log.debug "_createConnection: configure connection for socket "
         def connectionAddress = _getConnectionAddress(protocol, host, port, options)  //todo regex processing for host string
 
         def sockType
@@ -128,14 +150,27 @@ trait GzmqTrait {
         //get the socket
         //ZMQ.Socket socketInstance = context.createSocket(sockType)
         ZMQ.Socket socketInstance = context.createSocket(sockType)
+
+        String identity = options.'identity'
+        if (identity)
+            socketInstance.setIdentity(identity.getBytes())
+        println "socket of type $socketType identity is " + socketInstance.getIdentity().toString()
+        socketAgent.updateValue(socketInstance)  // is this not supposed to send message to effect this.
+
+        //if SUB socket setup subscription to topics or get all if none defined
+        if (sockType == ZMQ.SUB || sockType == ZMQ.XSUB) {
+            def topics = options.'topics' ?: [DEFAULT_SUBSCRIBE_ALL]
+            topics.each {socketAgent << {it.subscribe(it)}}
+        }
+
         //and either 'connect' as client or 'bind' as server.  default of 'connect' is assumed
         switch (endpoint) {
-            case "client" : socketInstance.connect (connectionAddress); break
-            case "server" : socketInstance.bind (connectionAddress); break
-            default: socketInstance.connect (connectionAddress); break
+            case "client" : socketAgent << {it.connect (connectionAddress)}; break
+            case "server" : socketAgent << {it.bind (connectionAddress)}; break
+            default: socketAgent <<{it.connect (connectionAddress)} ; break
         }
-        socketAgent.updateValue(socketInstance)  // is this not supposed to send message to effect this.
         this
+
     }
 
     void clearErrors() {
@@ -149,102 +184,67 @@ trait GzmqTrait {
             true
     }
 
-    def withSocket (Map details = [:], Closure doWork) {
+    def configure (String socketType, options = [:]){
+
+    }
+    /***
+     * delegates to based full fledged version, assumes its called with a socketType in the map
+     * @param details
+     * @param doWork
+     * @return
+     */
+    def withGzmq (Map details = [:], Closure doWork) {
         println "details map : " + details
         def socketType = details.'socketType'
         assert socketType
         details.remove('socketType')
-        def protocol = details.'prototype' ?: DEFAULT_PROTOCOL
-        details.remove ('prototype')
+        def protocol = details.'protocol' ?: DEFAULT_PROTOCOL
+        details.remove ('protocol')
         def port = details.'port' ?: DEFAULT_PORT
         details.remove ('port')
         def host = details.'host' ?: DEFAULT_HOST
         details.remove ('host')
 
-        withSocket (socketType, protocol, host, port, details,  doWork )
+        withGzmq (socketType, protocol, host, port, details,  doWork )
     }
 
-
-    def withSocket (String socketType, String protocol = "tcp", String host = "localhost", String port = "5555", Map options, Closure doWork) {
+    /**
+     * withGzmq will build a new socket instance and use it when running the doWork closure
+     * and then close the socket down.
+     * This is one time used only
+     * @param socketType
+     * @param protocol
+     * @param host
+     * @param port
+     * @param options
+     * @param doWork
+     * @return
+     */
+    def withGzmq (String socketType, String protocol = "tcp", String host = "localhost", def port = 5555, Map options, Closure doWork) {
         assert doWork instanceof Closure
-        int poolSize = options.'poolSize' ?: DEFAULT_POOL_SIZE
-        if (!context)
-            context = new ZContext(DEFAULT_POOL_SIZE)  //ZMQ.context(DEFAULT_POOL_SIZE)
+
+        if (port instanceof String)
+            port = Long.parseLong(port)
+
+        _createConnection(socketType, protocol, host, port, options)
 
         errors.clear()
-        String connectionAddress = "${protocol}://${host}:${port}".toString()  //todo regex processing for host string
-        def sockType
-        def endpoint = ""
-        switch (socketType) {
-            case "REQ" : sockType = ZMQ.REQ ; endpoint = "client"; break
-            case "REP" : sockType = ZMQ.REP; endpoint = "server"; break;  //XREP
-            case "PUB" : sockType = ZMQ.PUB; endpoint = "server";break
-            case "SUB" : sockType = ZMQ.SUB; endpoint = "client";break;
-            case "PULL" : sockType = ZMQ.PULL; endpoint = "client";  break;
-            case "PUSH" : sockType = ZMQ.PUSH; endpoint = "server"; break
-            case "PAIR" : sockType = ZMQ.PAIR; break
-            default : errors << "invalid socketType $socketType"
-        }
-
-        ZMQ.Socket socketInstance
-        socketInstance = socketAgent.val
-        if (!socketInstance) {
-            //get the socket and save it in agent wrapper, including any topic subscriptions if SUB/XSUB
-            try {
-                socketInstance = context.createSocket (sockType)// context.createSocket(sockType)
-                assert socketInstance
-                socketAgent.updateValue(socketInstance)
-
-
-                //and either connect as client or as server
-                switch (endpoint) {
-                    case "client":
-                        println "withSocket: connecting to $connectionAddress "
-                        socketAgent << {it.connect(connectionAddress)}
-                        break
-                    case "server":
-                        println "withSocket: binding to $connectionAddress "
-                        socketAgent << {it.bind(connectionAddress)}
-                        break
-                    default:
-                        println "withSocket: [default] connecting to $connectionAddress "
-                        socketAgent << {it.connect(connectionAddress)}
-                        break
-                }
-
-                //if SUB socket setup subscrition to topics or get all if none defined
-                if (sockType == ZMQ.SUB || sockType == ZMQ.XSUB) {
-                    def topics = options.'topics' ?: [DEFAULT_SUBSCRIBE_ALL]
-                    topics.each {socketAgent << {it.subscribe(it)}}
-                }
-
-                //invoke closure with gzmqTrait instance 'socket'
-                doWork?.call(this)
-
-            } catch (Exception e) {
-                errors << e.toString()  //todo define error object - quick cheat
-                println e.printStackTrace()
-            } finally {
-                //println "withSocket: close connection"
-                //this.close()
-            }
-        } else {
-            try {
-                //invoke closure with gzmqTrait instance 'socket'
-                doWork?.call(this)
-
-            } catch (Exception e) {
-                errors << e.toString()  //todo define error object - quick cheat
-                println e.printStackTrace()
-            } finally {
-                //println "withSocket: close connection"
-                //this.close()
-            }
+        try {
+            //invoke closure with gzmqTrait instance 'socket'
+            doWork?.call(this)
+        } catch (Exception e) {
+            errors << e.toString()  //todo define error object - quick cheat
+            log.debug "withSocket : errored with " + e.printStackTrace()
+        } finally {
+            log.debug "withSocket: close connection"
+            socketAgent << {it.disconnect(); it.close()}
+            socketAgent.updateValue(null)//clear old socket
         }
 
         this
     }
 
+    //used for method chaining
     def codec (type) {
         def codecType
         switch (type.toLowerCase()) {
@@ -283,8 +283,11 @@ trait GzmqTrait {
     private Closure _tidyAndExit (GzmqTrait gzmq) {
         assert gzmq
         ZContext zcontext = gzmq.context
-        ZMQ.Socket socket = gzmq.socketAgent.val
-        zcontext.destroySocket (socket)
+        def socket = socketAgent.val
+        socketAgent << {it.disconnect(); it.close()}
+        socketAgent.updateValue(null)//clear old socket
+
+        zcontext.destroySocket (socket)  //todo is this double effort ?
 
         zcontext.close()
     }
