@@ -137,7 +137,7 @@ trait GzmqTrait {
      * @return
      */
     private def _createConnection (String socketType, String protocol = "tcp", String host = "localhost", def port = 5555, Map options = [:]) {
-        int poolSize = options.'poolSize' ?: defaultOptionsMap.DEFAULT_POOL_SIZE
+        int poolSize = options.'poolSize' ?: defaultOptionsMap.poolSize
         if (!context) {
             context = new ZContext (poolSize)
         }
@@ -424,9 +424,10 @@ trait GzmqTrait {
     //request reply model
 
     def requestConnection (connectionAddress = "", Map options = [:],  Closure doWork=null) {
-        def poolSize = options.'poolSize' ?: DEFAULT_POOL_SIZE
+        def poolSize = options.'poolSize' ?: defaultOptionsMap.poolSize
         if (!context)
             context = new ZContext(poolSize)
+
 
         def socketType = options.'socketType'
         //assert socketType
@@ -460,14 +461,14 @@ trait GzmqTrait {
     }
 
     def replyConnection (connectionAddress = "", Map options = [:], Closure doWork=null) {
-        def poolSize = options.'poolSize' ?: DEFAULT_POOL_SIZE
+        def poolSize = options.'poolSize' ?: defaultOptionsMap.poolSize
         if (!context)
             context = new ZContext(poolSize)
 
         println "server binding on REP port "
         ZMQ.Socket responder  = context.createSocket(ZMQ.REP)
         responder.bind(connectionAddress ?: "tcp://localhost:5555")
-        clientSocketAgent.updateValue(responder)
+        serverSocketAgent.updateValue(responder)
 
         //invoke closure with requester socket
         if (doWork) {
@@ -486,7 +487,7 @@ trait GzmqTrait {
 
     //pub sub model
     def publisherConnection (connectionAddress = [""], Map options = [:]) {
-        def poolSize = options.'poolSize' ?: DEFAULT_POOL_SIZE
+        def poolSize = options.'poolSize' ?: defaultOptionsMap.poolSize
         if (!context)
             context = new ZContext(poolSize)
 
@@ -524,7 +525,7 @@ trait GzmqTrait {
     }
 
     def subscriberConnection (topics, connectionAddress = [""], Map options = [:]) {
-        def poolSize = options.'poolSize' ?: DEFAULT_POOL_SIZE
+        def poolSize = options.'poolSize' ?: defaultOptionsMap.poolSize
         if (!context)
             context = new ZContext(poolSize)
 
