@@ -5,13 +5,14 @@ import groovyx.gpars.agent.Agent
 import org.nustaq.serialization.FSTConfiguration
 import org.zeromq.ZContext
 import org.zeromq.ZMQ
-import org.zeromq.ZSocket
-import sun.security.pkcs11.Secmod
 
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 
+final enum GzmqEndpointType {
+    CLIENT,
+    SERVER
+}
 
 /**
  * Created by willw on 30/06/2017.
@@ -56,7 +57,8 @@ trait GzmqTrait {
 
     //make socket thread safe
     //todo remove single socket cosntraint - Gzmq instace can have more than 1 socket?
-    Agent<ZMQ.Socket> socketAgent = new Agent(null)
+    Agent<ZMQ.Socket> clientSocketAgent = new Agent(null)
+    Agent<ZMQ.Socket> serverSocketAgent = new Agent(null)
 
     //setup codecs for various serialisation options using FST library
     //codecs map sets up closures for each serialisation type
@@ -103,6 +105,20 @@ trait GzmqTrait {
         return "${socketProtocol}://${socketHost}:${socketPort}"  //todo regex processing for host string
     }
 
+    private GzmqEndpointType _getDefaultEndpointSocketType (String socketType){
+        def endpointType
+        switch  (socketType.toUpperCase())  {
+            case "REQ" : endpointType = GzmqEndpointType.CLIENT ;  break
+            case "REP" : endpointType = GzmqEndpointType.SERVER ;  break;  //XREP
+            case "PUB" : endpointType = GzmqEndpointType.CLIENT ; break
+            case "SUB" : endpointType = GzmqEndpointType.SERVER ; break;
+            case "PULL" : endpointType = GzmqEndpointType.SERVER;   break;
+            case "PUSH" : endpointType = GzmqEndpointType.CLIENT ;  break
+            //case "PAIR" : sockType = ZMQ.PAIR; break
+            default : endpointType = GzmqEndpointType.CLIENT
+        }
+        endpointType
+    }
 
     /**
      * if no context exists - it will create one and store it on the class instance in the trait.
@@ -121,7 +137,7 @@ trait GzmqTrait {
      * @return
      */
     private def _createConnection (String socketType, String protocol = "tcp", String host = "localhost", def port = 5555, Map options = [:]) {
-        int poolSize = options.'poolSize' ?: defaultOptionsMap.poolSize
+        int poolSize = options.'poolSize' ?: defaultOptionsMap.DEFAULT_POOL_SIZE
         if (!context) {
             context = new ZContext (poolSize)
         }
@@ -133,19 +149,20 @@ trait GzmqTrait {
         def connectionAddress = _getConnectionAddress(protocol, host, port, options)  //todo regex processing for host string
 
         def sockType
-        def endpoint = ""
         switch (socketType.toUpperCase()) {
-            case "REQ" : sockType = ZMQ.REQ ; endpoint = "client"; break
-            case "REP" : sockType = ZMQ.REP; endpoint = "server"; break;  //XREP
-            case "PUB" : sockType = ZMQ.PUB; endpoint = "client";break
-            case "SUB" : sockType = ZMQ.SUB; endpoint = "server";break;
-            case "PULL" : sockType = ZMQ.PULL; endpoint = "client";  break;
-            case "PUSH" : sockType = ZMQ.PUSH; endpoint = "server"; break
+            case "REQ" : sockType = ZMQ.REQ ;  break
+            case "REP" : sockType = ZMQ.REP;  break;  //XREP
+            case "PUB" : sockType = ZMQ.PUB; break
+            case "SUB" : sockType = ZMQ.SUB; break;
+            case "PULL" : sockType = ZMQ.PULL;   break;
+            case "PUSH" : sockType = ZMQ.PUSH;  break
             case "PAIR" : sockType = ZMQ.PAIR; break
         }
         //if endpoint is declared override
-        def optEndpoint = options.'endpoint'
-        endpoint =  optEndpoint ?: 'client'  //default for a client - i.e connect socket
+        def endpointType = _getDefaultEndpointSocketType(socketType)
+
+        def optEndpoint = options.'endpointType'  //should be enum type
+        def endpoint =  optEndpoint ?: endpointType //default for a client - i.e connect socket
 
         //get the socket
         //ZMQ.Socket socketInstance = context.createSocket(sockType)
@@ -155,19 +172,22 @@ trait GzmqTrait {
         if (identity)
             socketInstance.setIdentity(identity.getBytes())
         println "socket of type $socketType identity is " + socketInstance.getIdentity().toString()
-        socketAgent.updateValue(socketInstance)  // is this not supposed to send message to effect this.
+        if (endpoint == GzmqEndpointType.CLIENT)
+            clientSocketAgent.updateValue(socketInstance)  // is this not supposed to send message to effect this.
+        else if (endpoint == GzmqEndpointType.SERVER)
+            serverSocketAgent.updateValue(socketInstance)
 
         //if SUB socket setup subscription to topics or get all if none defined
         if (sockType == ZMQ.SUB || sockType == ZMQ.XSUB) {
             def topics = options.'topics' ?: [DEFAULT_SUBSCRIBE_ALL]
-            topics.each {socketAgent << {it.subscribe(it)}}
+            topics.each {clientSocketAgent << {it.subscribe(it)}}
         }
 
         //and either 'connect' as client or 'bind' as server.  default of 'connect' is assumed
         switch (endpoint) {
-            case "client" : socketAgent << {it.connect (connectionAddress)}; break
-            case "server" : socketAgent << {it.bind (connectionAddress)}; break
-            default: socketAgent <<{it.connect (connectionAddress)} ; break
+            case GzmqEndpointType.CLIENT : clientSocketAgent << {it.connect (connectionAddress)}; break
+            case GzmqEndpointType.SERVER : serverSocketAgent << {it.bind (connectionAddress)}; break
+            default: clientSocketAgent <<{it.connect (connectionAddress)} ; break
         }
         this
 
@@ -228,18 +248,27 @@ trait GzmqTrait {
 
         _createConnection(socketType, protocol, host, port, options)
 
+        Closure work = doWork?.clone()
+        work.delegate = this    //set Gzmq as delegate for the closure
+
         errors.clear()
         try {
             //invoke closure with gzmqTrait instance 'socket'
-            doWork?.call(this)
+            work?.call(this)
         } catch (Exception e) {
             errors << e.toString()  //todo define error object - quick cheat
             log.debug "withSocket : errored with " + e.printStackTrace()
         } finally {
             log.debug "withSocket: close connection"
-            socketAgent << {it.disconnect(); it.close()}
-            socketAgent.updateValue(null)//clear old socket
-        }
+            def endpointType = _getDefaultEndpointSocketType(socketType)
+            if (endpointType == GzmqEndpointType.CLIENT) {
+                clientSocketAgent << { it.disconnect(); it.close() }
+                clientSocketAgent.updateValue(null)//clear old socket
+            } else {
+                serverSocketAgent.updateValue(null)//clear old socket
+                serverSocketAgent.updateValue(null)//clear old socket
+            }
+        }//end finally
 
         this
     }
@@ -262,7 +291,7 @@ trait GzmqTrait {
     }
 
     ZMQ.Socket getSocket() {
-        socketAgent.val
+        clientSocketAgent.val
     }
 
     def close () {
@@ -270,7 +299,7 @@ trait GzmqTrait {
         if (context != null ) {
             println "close called "
             _tidyAndExit(this)
-            socketAgent.updateValue(null)
+            clientSocketAgent.updateValue(null)
             context = null
             if (timer)
                 timer.cancel()
@@ -283,9 +312,9 @@ trait GzmqTrait {
     private Closure _tidyAndExit (GzmqTrait gzmq) {
         assert gzmq
         ZContext zcontext = gzmq.context
-        def socket = socketAgent.val
-        socketAgent << {it.disconnect(); it.close()}
-        socketAgent.updateValue(null)//clear old socket
+        def socket = clientSocketAgent.val
+        clientSocketAgent << {it.disconnect(); it.close()}
+        clientSocketAgent.updateValue(null)//clear old socket
 
         zcontext.destroySocket (socket)  //todo is this double effort ?
 
@@ -336,7 +365,7 @@ trait GzmqTrait {
                    //schedule timer cancellation if finish defined
         }
 
-        assert socketAgent.val
+        assert clientSocketAgent.val
 
         String first = new String (_getBytes(dataClosure))
 
@@ -344,7 +373,7 @@ trait GzmqTrait {
         timer.schedule (
                 //task, evaluate closure each time in case result is different
                 //{socket.send (codecEnabled ? encode (dataClosure()): dataClosure() as byte[], 0)},
-                {socketAgent << {it.send (_getBytes(dataClosure), 0)}},
+                {clientSocketAgent << {it.send (_getBytes(dataClosure), 0)}},
                 delay,
                 frequency)
         println "sch socket send every $frequency ms"
@@ -364,9 +393,9 @@ trait GzmqTrait {
             buf = message as byte[]
         }
 
-        assert socketAgent.val
+        assert clientSocketAgent.val
 
-        def result = socketAgent << {it.send (buf, 0) }//block till message arrives
+        def result = clientSocketAgent << {it.send (buf, 0) }//block till message arrives
 
         //TODO: check result return for error
         this
@@ -374,9 +403,9 @@ trait GzmqTrait {
 
     def receive (Class type = null, Closure resultCallback) {
         assert resultCallback
-        assert socketAgent.val
+        assert clientSocketAgent.val
         byte[] result = []
-        socketAgent.sendAndWait {result = it.recv()}  //wait for result to be set
+        clientSocketAgent.sendAndWait {result = it.recv()}  //wait for result to be set
         println "receive: result as bytes : ${result.toString()} (${String.newInstance(result)})"
         if (codecEnabled) {
             resultCallback (decode (result))
@@ -413,7 +442,7 @@ trait GzmqTrait {
         ZMQ.Socket requester = context.createSocket(ZMQ.REQ)
         //TODO set socket options
         requester.connect(connectionAddress ?: "tcp://localhost:5555")
-        socketAgent.updateValue(requester)
+        clientSocketAgent.updateValue(requester)
 
         //invoke closure with requester socket
         if (doWork) {
@@ -438,7 +467,7 @@ trait GzmqTrait {
         println "server binding on REP port "
         ZMQ.Socket responder  = context.createSocket(ZMQ.REP)
         responder.bind(connectionAddress ?: "tcp://localhost:5555")
-        socketAgent.updateValue(responder)
+        clientSocketAgent.updateValue(responder)
 
         //invoke closure with requester socket
         if (doWork) {
@@ -482,7 +511,7 @@ trait GzmqTrait {
                 connectionAddress.each {publisher.bind (it)}
             }
             //publisher.bind ("ipc://weather")  //figure out to handle multiple binds
-            socketAgent.updateValue(publisher)
+            clientSocketAgent.updateValue(publisher)
 
             this
         } catch (Exception e) {
@@ -509,14 +538,14 @@ trait GzmqTrait {
 
         println "subscriber (client) connecting to publishing port "
         ZMQ.Socket subscriber
-        subscriber = socketAgent.val
+        subscriber = clientSocketAgent.val
         if (!subscriber)
             subscriber = context.createSocket (ZMQ.SUB)  //create new subscriber socket
         connectionAddress.each {subscriber.connect (it)}
         topics.each {subscriber.subscribe (it.bytes)}
 
         //publisher.bind ("ipc://weather")  //figure out to handle multiple binds
-        socketAgent.updateValue(subscriber)
+        clientSocketAgent.updateValue(subscriber)
 
         this
 
@@ -525,14 +554,14 @@ trait GzmqTrait {
     def subscribe (topics) {
         println "subscribe to topic $topics "
         if (topics == "") {
-            socketAgent << {it.subscribe (topics.bytes)}     //subscribe all messages
+            clientSocketAgent << {it.subscribe (topics.bytes)}     //subscribe all messages
         }
         else if (! topics instanceof Iterable ) {
-            socketAgent << {it.subscribe (topics.bytes)}
+            clientSocketAgent << {it.subscribe (topics.bytes)}
         }
         else {
             //for each element
-            topics.each {socketAgent << {it.subscribe (it.bytes)} }
+            topics.each {clientSocketAgent << {it.subscribe (it.bytes)} }
         }
         //publisher.bind ("ipc://weather")  //figure out to handle multiple binds
 
@@ -542,16 +571,16 @@ trait GzmqTrait {
 
     def unsubscribe (topics) {
         println "unsubscribe to topic $topics "
-        ZMQ.Socket subscriber = socketAgent.val
+        ZMQ.Socket subscriber = clientSocketAgent.val
         if (topics == "") {
-            socketAgent << {it.unsubscribe(topics.bytes)}     //subscribe all messages
+            clientSocketAgent << {it.unsubscribe(topics.bytes)}     //subscribe all messages
         }
         else if (! topics instanceof ArrayList ) {
-            socketAgent << {it.unsubscribe(topics.bytes)}
+            clientSocketAgent << {it.unsubscribe(topics.bytes)}
         }
         else {
             //for each element
-            topics.each { socketAgent << {it.unsubscribe(topics.bytes)} }
+            topics.each { clientSocketAgent << {it.unsubscribe(topics.bytes)} }
         }
         //publisher.bind ("ipc://weather")  //figure out to handle multiple binds
 
