@@ -105,18 +105,25 @@ trait GzmqTrait {
         return "${socketProtocol}://${socketHost}:${socketPort}"  //todo regex processing for host string
     }
 
-    private GzmqEndpointType _getDefaultEndpointSocketType (String socketType){
+    private GzmqEndpointType _getDefaultEndpointSocketType (String socketType, Map options = [:]){
         def endpointType
-        switch  (socketType.toUpperCase())  {
-            case "REQ" : endpointType = GzmqEndpointType.CLIENT ;  break
-            case "REP" : endpointType = GzmqEndpointType.SERVER ;  break;  //XREP
-            case "PUB" : endpointType = GzmqEndpointType.CLIENT ; break
-            case "SUB" : endpointType = GzmqEndpointType.SERVER ; break;
-            case "PULL" : endpointType = GzmqEndpointType.SERVER;   break;
-            case "PUSH" : endpointType = GzmqEndpointType.CLIENT ;  break
-            //case "PAIR" : sockType = ZMQ.PAIR; break
-            default : endpointType = GzmqEndpointType.CLIENT
-        }
+
+        def overrideEndpointType = options.endpoint
+
+        if (!overrideEndpointType){
+
+            switch  (socketType.toUpperCase())  {
+                case "REQ" : endpointType = GzmqEndpointType.CLIENT ;  break
+                case "REP" : endpointType = GzmqEndpointType.SERVER ;  break  //XREP
+                case "PUB" : endpointType = GzmqEndpointType.CLIENT ; break
+                case "SUB" : endpointType = GzmqEndpointType.SERVER ; break
+                case "PULL" : endpointType = GzmqEndpointType.SERVER;   break
+                case "PUSH" : endpointType = GzmqEndpointType.CLIENT ;  break
+                //todo case "PAIR" : sockType = ZMQ.PAIR; break
+                default : endpointType = GzmqEndpointType.CLIENT; break
+            }
+        } else
+            endpointType = overrideEndpointType
         endpointType
     }
 
@@ -531,11 +538,8 @@ trait GzmqTrait {
 
         errors.clear()
 
-        def port = options.'port' ?: "5556"
-        def protocol = options.'protocol' ?: 'tcp'
-        def host = options.'host' ?: 'localhost'
         if (connectionAddress == [""])
-            connectionAddress = ["${protocol}://${host}:${port}"]
+            connectionAddress = _getConnectionAddress(defaultOptionsMap.protool, defaultOptionsMap.host, defaultOptionsMap.port, options )
 
         println "subscriber (client) connecting to publishing port "
         ZMQ.Socket subscriber
