@@ -464,7 +464,8 @@ trait GzmqTrait {
         ZMsg client = clientAddress ?: lastMessageHeadersAgent.val  //if clientAddress is null use last record message
         //setup the return message with correct 0mq headers
         ZMsg outMsg = new ZMsg()
-        clientAddress.each {frame -> outMsg << frame}  //setup client return address details
+        //clientAddress.each {frame -> outMsg << frame}  //setup client return address details
+        outMsg.addAll(client.toArray())
         outMsg << new ZFrame (buf)
 
         def result = socketAgent << {outMsg.send(it) }
@@ -496,6 +497,7 @@ trait GzmqTrait {
         //lastReceiveMessageHeaders
         ZMsg sentFromHeaders = new ZMsg()
         //get all headers and delimiter frame and set in the sentFrom
+        def frames = resultMsg.toArray()
         sentFromHeaders.addAll(resultMsg.toArray())
         lastMessageHeadersAgent.updateValue (sentFromHeaders)
 
