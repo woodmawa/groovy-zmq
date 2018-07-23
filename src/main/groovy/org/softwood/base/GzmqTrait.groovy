@@ -473,7 +473,7 @@ trait GzmqTrait {
         //check options flag for complete key, if so invoke exit closure
         if (options.complete) {
             println "complete option was set on request - tidy and get out"
-            _tidyAndExit(this)
+            _tidyAndDestroySocket(this)
         }
 
         this
@@ -487,7 +487,7 @@ trait GzmqTrait {
         println "server binding on REP port "
         ZMQ.Socket responder  = context.createSocket(ZMQ.REP)
         responder.bind(connectionAddress ?: "tcp://localhost:5555")
-        serverSocketAgent.updateValue(responder)
+        socketAgent.updateValue(responder)
 
         //invoke closure with requester socket
         if (doWork) {
@@ -498,7 +498,7 @@ trait GzmqTrait {
         //check options flag for complete key, if so invoke exit closure
         if (options.complete) {
             println "complete option was set on reply  - tidy and get out"
-            _tidyAndExit(this)
+            _tidyAndDestroySocket(this)
         }
 
         this
