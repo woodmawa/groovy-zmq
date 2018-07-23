@@ -1,5 +1,6 @@
 package org.softwood.scripts
 
+import groovy.util.logging.Slf4j
 import org.softwood.base.GzmqTrait
 
 /**
@@ -10,6 +11,7 @@ class Client2 implements GzmqTrait {
 
 }
 
+//@Slf4j
 class Server2 implements GzmqTrait {
 
 
@@ -21,12 +23,12 @@ server2 = new Server2 ()
 t1 = Thread.start {
     println "start client on new thread "
     //client2.configure("REQ").codec('java').withGzmq {gzmq ->
-    client2.codec('java').withGzmq (socketType:"REQ") {gzmq ->
+    client2.withGzmq (socketType:"REQ") {gzmq ->
         println "client sends message .."
         gzmq.send "Hello Will"
 
         def reply
-        gzmq.receive({reply = it})
+        gzmq.receive(String , {reply = it})
         println "client received response : ' ${reply}"
 
     }.close ()
@@ -34,7 +36,8 @@ t1 = Thread.start {
 
 t2 = Thread.start {
     println "start server on new thread "
-    server2.codec('java').withGzmq (socketType:"REP") {gzmq ->
+//    server2.codec('json').withGzmq (socketType:"REP") {gzmq ->
+    server2.withGzmq (socketType:"REP") {gzmq ->
         //read 1 message from socket
         byte[] request
         gzmq.receive({request = it })

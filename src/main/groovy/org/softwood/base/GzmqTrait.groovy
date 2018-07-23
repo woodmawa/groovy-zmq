@@ -1,8 +1,9 @@
 package org.softwood.base
 
-import groovy.util.logging.Slf4j
 import groovyx.gpars.agent.Agent
 import org.nustaq.serialization.FSTConfiguration
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import org.zeromq.ZContext
 import org.zeromq.ZMQ
 
@@ -27,7 +28,7 @@ final enum GzmqEndpointType {
  * logically a Gzmq instance represents a 0mq socket, of endpoint type one of client or server
  *
  */
-@Slf4j
+
 trait GzmqTrait {
 
     static final int DEFAULT_POOL_SIZE = 1
@@ -46,6 +47,9 @@ trait GzmqTrait {
             host:DEFAULT_HOST,
             port: DEFAULT_PORT,
             subscription: DEFAULT_SUBSCRIBE_ALL]
+
+    //We cant use AST transformations in traits - so setup a logger the old fashioned way
+    Logger log = LoggerFactory.getLogger(this.getClass())
 
     /**
      * user high level api
@@ -107,11 +111,12 @@ trait GzmqTrait {
         return "${socketProtocol}://${socketHost}:${socketPort}"  //todo regex processing for host string
     }
 
-    private GzmqEndpointType _getDefaultEndpointSocketType (String socketType, Map options = [:]){
-        def endpointType
+    // making this private causes runtime error on interface types!? Weird
+    GzmqEndpointType _getDefaultEndpointForSocketType(String socketType, Map options = [:]){
+        GzmqEndpointType endpointType
 
         //check if and endpoint type override (client or server) is suggested for the socket
-        def overrideEndpointType = options.endpoint
+        GzmqEndpointType overrideEndpointType = options.endpoint
 
         //otherwise return a sensible default endpoint type for a given socketType
         if (!overrideEndpointType){
@@ -131,7 +136,8 @@ trait GzmqTrait {
         endpointType
     }
 
-    /**
+
+     /**
      * if no context exists - it will create one and store it on the class instance in the trait.
      *
      * The _createConnection function will build and configure a socket of the appropriate named type and store that
@@ -170,7 +176,7 @@ trait GzmqTrait {
             case "PAIR" : sockType = ZMQ.PAIR; break
         }
         //if endpoint is declared override
-        endpointType = _getDefaultEndpointSocketType(socketType, options)
+        endpointType = _getDefaultEndpointForSocketType(socketType, (Map)options)
 
        //get the socket
         //ZMQ.Socket socketInstance = context.createSocket(sockType)
@@ -255,7 +261,7 @@ trait GzmqTrait {
         _createConnection(socketType, protocol, host, port, options)
 
         Closure work = doWork?.clone()
-        work.delegate = this    //set Gzmq as delegate for the closure
+        work?.delegate = this    //set Gzmq as delegate for the closure
 
         errors.clear()
         try {
@@ -263,11 +269,10 @@ trait GzmqTrait {
             work?.call(this)
         } catch (Exception e) {
             errors << e.toString()  //todo define error object - quick cheat
-            log.debug "withSocket : errored with " + e.printStackTrace()
+            log.debug "withSocket : work closure /runnable produced error with \n " + e.printStackTrace()
         } finally {
             log.debug "withSocket: close connection"
-            def endpointType = _getDefaultEndpointSocketType(socketType)
-                socketAgent << { it.disconnect(); it.close() }
+            _tidyAndDestroySocket(this)
             //todo - set socket to null ?
         }//end finally
 
@@ -300,8 +305,8 @@ trait GzmqTrait {
         if (context != null ) {
             println "close called "
             _tidyAndExit(this)
-            socketAgent.updateValue(null)
-            context = null
+            if (context.isClosed())
+                context = null
             if (timer)
                 timer.cancel()
         }
@@ -322,12 +327,23 @@ trait GzmqTrait {
         zcontext.close()
     }
 
-    byte[] _getBytes (closToEval) {/*= {clos -> *?*/
+    //  internal routine: close zmq socket and terminate the context
+    private Closure _tidyAndDestroySocket (GzmqTrait gzmq) {
+        assert gzmq
+        ZContext zcontext = gzmq.context
+        def socket = socketAgent.val
+        socketAgent << {it.disconnect(); it.close()}
+        socketAgent.updateValue(null)//clear old socket
+
+        zcontext.destroySocket (socket)  //todo is this double effort ?
+    }
+
+    byte[] _getBytesToSend(closureToEval) {/*= {clos -> *?*/
         def buffer
         if (codecEnabled)
-            buffer = encode(closToEval())  //encode returned result of closure
+            buffer = encode(closureToEval())  //encode returned result of closure
         else {
-            buffer = closToEval.call()
+            buffer = closureToEval.call()
             if (buffer instanceof GString) {
                 buffer = buffer.bytes
             }
@@ -368,13 +384,13 @@ trait GzmqTrait {
 
         assert socketAgent.val
 
-        String first = new String (_getBytes(dataClosure))
+        String first = new String (_getBytesToSend(dataClosure))
 
         println "first set of bytes > $first"
         timer.schedule (
                 //task, evaluate closure each time in case result is different
                 //{socket.send (codecEnabled ? encode (dataClosure()): dataClosure() as byte[], 0)},
-                {socketAgent << {it.send (_getBytes(dataClosure), 0)}},
+                {socketAgent << {it.send (_getBytesToSend(dataClosure), 0)}},
                 delay,
                 frequency)
         println "sch socket send every $frequency ms"
@@ -387,16 +403,17 @@ trait GzmqTrait {
         def buf
         if (message.class == Closure)
             message = message()  // call closure and use result as object to send
-        if (codecEnabled) {
+        if (codecEnabled.get()) {
             buf = encode (message)
             println "send: encoded message as $buf"
         } else {
             buf = message as byte[]
+            println "send: unencoded message as $buf"
         }
 
         assert socketAgent.val
 
-        def result = socketAgent << {it.send (buf, 0) }//block till message arrives
+        def result = socketAgent << {it.send (buf, 0) }
 
         //TODO: check result return for error
         this
@@ -408,11 +425,12 @@ trait GzmqTrait {
         byte[] result = []
         socketAgent.sendAndWait {result = it.recv()}  //wait for result to be set
         println "receive: result as bytes : ${result.toString()} (${String.newInstance(result)})"
-        if (codecEnabled) {
+        if (codecEnabled.get()) {
             resultCallback (decode (result))
         } else {
             if (type == String){
-                println "receive: expected type was String, convert result to String"
+                println "receive: requested return type was String, convert result to String"
+                log.debug "receive: requested return type was String, convert result to String"
                 resultCallback (String.newInstance(result))
             } else if (type != null)
                 resultCallback (result.asType(type))
