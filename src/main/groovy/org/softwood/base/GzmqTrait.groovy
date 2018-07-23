@@ -5,7 +5,9 @@ import org.nustaq.serialization.FSTConfiguration
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.zeromq.ZContext
+import org.zeromq.ZFrame
 import org.zeromq.ZMQ
+import org.zeromq.ZMsg
 
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
@@ -64,7 +66,8 @@ trait GzmqTrait {
     //make socket thread safe
     //todo remove single socket cosntraint - Gzmq instace can have more than 1 socket?
     Agent<ZMQ.Socket> socketAgent = new Agent(null)
-    GzmqEndpointType endpointType
+    Agent<ZMsg> lastMessageHeadersAgent = new Agent (new ZMsg())
+    GzmqEndpointType endpointType  //needs to be thread safe ?
 
     //setup codecs for various serialisation options using FST library
     //codecs map sets up closures for each serialisation type
@@ -126,6 +129,8 @@ trait GzmqTrait {
                 case "REP" : endpointType = GzmqEndpointType.SERVER ;  break  //XREP
                 case "PUB" : endpointType = GzmqEndpointType.CLIENT ; break
                 case "SUB" : endpointType = GzmqEndpointType.SERVER ; break
+                case "DEALER" :  endpointType = GzmqEndpointType.CLIENT; break
+                case "ROUTER" : endpointType = GzmqEndpointType.SERVER; break
                 case "PUSH" : endpointType = GzmqEndpointType.CLIENT ;  break
                 case "PULL" : endpointType = GzmqEndpointType.SERVER;   break
                 //todo case "PAIR" : sockType = ZMQ.PAIR; break
@@ -167,11 +172,13 @@ trait GzmqTrait {
 
         def sockType
         switch (socketType.toUpperCase()) {
-            case "REQ" : sockType = ZMQ.REQ ;  break
+            case "REQ" : sockType = ZMQ.REQ ; break
             case "REP" : sockType = ZMQ.REP;  break;  //XREP
-            case "PUB" : sockType = ZMQ.PUB; break
-            case "SUB" : sockType = ZMQ.SUB; break;
-            case "PULL" : sockType = ZMQ.PULL;   break;
+            case "PUB" : sockType = ZMQ.PUB;  break
+            case "SUB" : sockType = ZMQ.SUB;  break
+            case "DEALER" : sockType = ZMQ.DEALER; break
+            case "ROUTER" : sockType = ZMQ.ROUTER; break
+            case "PULL" : sockType = ZMQ.PULL;  break
             case "PUSH" : sockType = ZMQ.PUSH;  break
             case "PAIR" : sockType = ZMQ.PAIR; break
         }
@@ -398,7 +405,13 @@ trait GzmqTrait {
         this
     }
 
-
+    /**
+     * sends a message to socket using higher level API
+     * could take optional headers map - and create a Frame for each header in the map,
+     * tags the message as last frame using codec if defined
+     * @param message
+     * @return
+     */
     def send (message) {
         def buf
         if (message.class == Closure)
@@ -413,17 +426,86 @@ trait GzmqTrait {
 
         assert socketAgent.val
 
-        def result = socketAgent << {it.send (buf, 0) }
+        /**
+         * create new message with no 0mq headers - just message delimeter and data as last frame
+         */
+        ZMsg outMsg = new ZMsg()
+        outMsg << new ZFrame()  //send empty frame delimiter
+        outMsg << new ZFrame (buf)
+
+        //def result = socketAgent << {it.send (buf, 0) }  //original code before using ZMsg
+        //new : try sending message as sequence of frames
+        def result = socketAgent << {outMsg.send(it) }
+
+        this
+    }
+
+    /**
+     * allows receiver (normally a server) respond to a message.  There can be many senders on
+     * fan in so you have to be able to capture and save which client called you
+     * @param clientAddress
+     * @param message
+     * @return
+     */
+    def reply (message, ZMsg clientAddress = null) {
+        def buf
+        if (message.class == Closure)
+            message = message()  // call closure and use result as object to send
+        if (codecEnabled.get()) {
+            buf = encode (message)
+            println "send: encoded message as $buf"
+        } else {
+            buf = message as byte[]
+            println "send: unencoded message as $buf"
+        }
+
+        assert socketAgent.val
+
+        ZMsg client = clientAddress ?: lastMessageHeadersAgent.val  //if clientAddress is null use last record message
+        //setup the return message with correct 0mq headers
+        ZMsg outMsg = new ZMsg()
+        clientAddress.each {frame -> outMsg << frame}  //setup client return address details
+        outMsg << new ZFrame (buf)
+
+        def result = socketAgent << {outMsg.send(it) }
+
+        println "sent repy message to "
+        outMsg.dump (System.out)
 
         //TODO: check result return for error
         this
     }
 
-    def receive (Class type = null, Closure resultCallback) {
+    def receive (Class type = null, Closure resultCallback, Closure sentFromAddress = null) {
         assert resultCallback
         assert socketAgent.val
         byte[] result = []
-        socketAgent.sendAndWait {result = it.recv()}  //wait for result to be set
+        ZMsg resultMsg
+//        socketAgent.sendAndWait {result = it.recv()}  //wait for result to be set
+        socketAgent.sendAndWait {resultMsg = ZMsg.recvMsg (it)}  //wait for result to be set, theres a wait timeout version
+        if (resultMsg == null) {
+            println "receive message barfed "
+
+        }
+
+        resultMsg.dump(System.out) //debug
+
+        ZFrame dataFrame = resultMsg.removeLast()
+        result = dataFrame.getData()
+
+        //lastReceiveMessageHeaders
+        ZMsg sentFromHeaders = new ZMsg()
+        //get all headers and delimiter frame and set in the sentFrom
+        sentFromHeaders.addAll(resultMsg.toArray())
+        lastMessageHeadersAgent.updateValue (sentFromHeaders)
+
+        if (sentFromAddress instanceof Closure){
+
+            sentFromAddress (sentFromHeaders)  //call closure and pass in the sentFromHeaders
+            println "setup return address as "
+            sentFromHeaders.dump (System.out)
+        }
+
         println "receive: result as bytes : ${result.toString()} (${String.newInstance(result)})"
         if (codecEnabled.get()) {
             resultCallback (decode (result))
@@ -503,6 +585,7 @@ trait GzmqTrait {
 
         this
     }
+
 
     //pub sub model
     def publisherConnection (connectionAddress = [""], Map options = [:]) {
