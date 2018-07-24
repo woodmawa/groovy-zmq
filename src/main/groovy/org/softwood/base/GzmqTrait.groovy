@@ -491,6 +491,24 @@ trait GzmqTrait {
         this
     }
 
+    /**
+     * supports passing the receive header frames to passed closure
+     *
+     * @param clientHeaders - closure called with receive's header frames
+     * @return
+     */
+    def rightShift (Closure clientHeaders) {
+
+        assert clientHeaders
+
+        Closure clientHeaderClosure = clientHeaders.clone()
+        clientHeaderClosure.delegate = this //set Gzmq as delegate
+
+        //call closure passing in the header frames retrieved from the receive call
+        clientHeaderClosure.call (lastSentMessageHeadersAgent.val)
+        this
+    }
+
     //delegate to full form with null class 'type' expectation
     def receive (Closure resultCallback, Closure sentFromAddress = null) {
         return receive (null, resultCallback, sentFromAddress)
