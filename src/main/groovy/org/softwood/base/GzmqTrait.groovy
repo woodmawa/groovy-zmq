@@ -90,6 +90,18 @@ trait GzmqTrait {
     volatile boolean timerEnabled = false  //ensure we cross memory boundary
 
     /**
+     * as traits don't support annotations for logging, provide
+     * a setter to let the class that implements the trait to inject
+     * its log instance for the trait to use
+     * @param injectedLog
+     * @return
+     */
+    def setLogger (injectedLog) {
+        assert injectedLog
+        log = injectedLog
+    }
+
+    /**
      * constructs a connection address by concatenating
      * @param protocol - typically tcp assumed
      * @param host
