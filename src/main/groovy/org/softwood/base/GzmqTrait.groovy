@@ -491,16 +491,21 @@ trait GzmqTrait {
         this
     }
 
-    def receive (Class type = null, Closure resultCallback, Closure sentFromAddress = null) {
+    //delegate to full form with null class 'type' expectation
+    def receive (Closure resultCallback, Closure sentFromAddress = null) {
+        return receive (null, resultCallback, sentFromAddress)
+    }
+
+    def receive (Class type, Closure resultCallback, Closure sentFromAddress = null) {
         assert resultCallback
         assert socketAgent.val
         byte[] result = []
         ZMsg resultMsg
-//        socketAgent.sendAndWait {result = it.recv()}  //wait for result to be set
+
         socketAgent.sendAndWait {resultMsg = ZMsg.recvMsg (it)}  //wait for result to be set, theres a wait timeout version
         if (resultMsg == null) {
             println "receive message barfed "
-            //todo create errors object 
+            //todo create errors object
         }
 
         ZFrame dataFrame = resultMsg.removeLast()
