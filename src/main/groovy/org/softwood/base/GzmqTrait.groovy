@@ -66,7 +66,7 @@ trait GzmqTrait {
     //make socket thread safe
     //todo remove single socket cosntraint - Gzmq instace can have more than 1 socket?
     Agent<ZMQ.Socket> socketAgent = new Agent(null)
-    Agent<ZMsg> lastMessageHeadersAgent = new Agent (new ZMsg())
+    Agent<ZMsg> lastSentMessageHeadersAgent = new Agent (new ZMsg())
     GzmqEndpointType endpointType  //needs to be thread safe ?
 
     //setup codecs for various serialisation options using FST library
@@ -441,13 +441,13 @@ trait GzmqTrait {
         /**
          * create new message with no 0mq headers - just message delimeter and data as last frame
          */
-        ZMsg outMsg = new ZMsg()
-        outMsg << new ZFrame()  //send empty frame delimiter
-        outMsg << new ZFrame (buf)
+        Agent<ZMsg> outMsgAgent = new Agent (new ZMsg())
+        outMsgAgent << {it.add (new ZFrame()) }  //send empty frame delimiter
+        outMsgAgent << {it.add (new ZFrame (buf))}
 
         //def result = socketAgent << {it.send (buf, 0) }  //original code before using ZMsg
         //new : try sending message as sequence of frames
-        def result = socketAgent << {outMsg.send(it) }
+        def result = socketAgent << {socket -> outMsgAgent.val.send(socket) }
 
         this
     }
@@ -473,17 +473,19 @@ trait GzmqTrait {
 
         assert socketAgent.val
 
-        ZMsg client = clientAddress ?: lastMessageHeadersAgent.val  //if clientAddress is null use last record message
+        ZMsg client = clientAddress ?: lastSentMessageHeadersAgent.val  //if clientAddress is null use last record message
+
         //setup the return message with correct 0mq headers
-        ZMsg outMsg = new ZMsg()
+        Agent<ZMsg> repMsgAgent = new Agent (new ZMsg())
         //clientAddress.each {frame -> outMsg << frame}  //setup client return address details
-        outMsg.addAll(client.toArray())
-        outMsg << new ZFrame (buf)
+        repMsgAgent << {it.addAll(client.toArray())}
+        repMsgAgent << {it.add new ZFrame (buf)}
 
-        def result = socketAgent << {outMsg.send(it) }
+        def result = socketAgent << {socket -> repMsgAgent.val.send(socket) }
 
+        //had a concurrent modification exception here so protected repMsg
         println "sent repy message to "
-        outMsg.dump (System.out)
+        repMsgAgent << {it.dump (System.out)}
 
         //TODO: check result return for error
         this
@@ -498,10 +500,8 @@ trait GzmqTrait {
         socketAgent.sendAndWait {resultMsg = ZMsg.recvMsg (it)}  //wait for result to be set, theres a wait timeout version
         if (resultMsg == null) {
             println "receive message barfed "
-
+            //todo create errors object 
         }
-
-        resultMsg.dump(System.out) //debug
 
         ZFrame dataFrame = resultMsg.removeLast()
         result = dataFrame.getData()
@@ -511,7 +511,7 @@ trait GzmqTrait {
         //get all headers and delimiter frame and set in the sentFrom
         def frames = resultMsg.toArray()
         sentFromHeaders.addAll(resultMsg.toArray())
-        lastMessageHeadersAgent.updateValue (sentFromHeaders)
+        lastSentMessageHeadersAgent.updateValue (sentFromHeaders)
 
         if (sentFromAddress instanceof Closure){
 

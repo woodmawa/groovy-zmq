@@ -8,9 +8,11 @@ import org.zeromq.ZMsg
 /**
  * Created by willw on 30/06/2017.
  */
-
+@Slf4j
 class Client3 implements GzmqTrait {
-
+    def testLogger () {
+        log.debug "hello from client3 logging "
+    }
 }
 
 @Slf4j
@@ -19,13 +21,14 @@ class Server3 implements GzmqTrait {
 
 }
 
-client2 = new Client3 ()
-server2 = new Server3 ()
+client3 = new Client3 ()
+server3 = new Server3 ()
 
 t1 = Thread.start {
+    client3.testLogger()
     println "start client on new thread "
     //client2.configure("REQ").codec('java').withGzmq {gzmq ->
-    client2.withGzmq (socketType:"DEALER") {gzmq ->
+    client3.withGzmq (socketType:"DEALER") {gzmq ->
         println "client sends message .."
         gzmq.send "Hello Will"
         println "client immediatley sends another message .."
@@ -41,7 +44,7 @@ t1 = Thread.start {
 t2 = Thread.start {
     println "start server on new thread "
 //    server2.codec('json').withGzmq (socketType:"REP") {gzmq ->
-    server2.withGzmq (socketType:"ROUTER") {gzmq ->
+    server3.withGzmq (socketType:"ROUTER") {gzmq ->
         //read 1 message from socket
         byte[] request
         gzmq.receive({request = it })
