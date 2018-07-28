@@ -448,7 +448,6 @@ trait GzmqTrait {
         //def result = socketAgent << {it.send (buf, 0) }  //original code before using ZMsg
         //new : try sending message as sequence of frames
         def result = socketAgent << {socket -> outMsgAgent.val.send(socket) }
-
         this
     }
 
@@ -488,24 +487,6 @@ trait GzmqTrait {
         repMsgAgent << {it.dump (System.out)}
 
         //TODO: check result return for error
-        this
-    }
-
-    /**
-     * supports passing the receive header frames to passed closure
-     *
-     * @param clientHeaders - closure called with receive's header frames
-     * @return
-     */
-    def rightShift (Closure clientHeaders) {
-
-        assert clientHeaders
-
-        Closure clientHeaderClosure = clientHeaders.clone()
-        clientHeaderClosure.delegate = this //set Gzmq as delegate
-
-        //call closure passing in the header frames retrieved from the receive call
-        clientHeaderClosure.call (lastSentMessageHeadersAgent.val)
         this
     }
 
@@ -558,6 +539,25 @@ trait GzmqTrait {
         }
         this
     }
+
+    /**
+     * supports passing the receive header frames to passed closure
+     *
+     * @param clientHeaders - closure called with receive's header frames
+     * @return
+     */
+    def rightShift (Closure clientHeaders) {
+
+        assert clientHeaders
+
+        Closure clientHeaderClosure = clientHeaders.clone()
+        clientHeaderClosure.delegate = this //set Gzmq as delegate
+
+        //call closure passing in the header frames retrieved from the receive call
+        clientHeaderClosure.call (lastSentMessageHeadersAgent.val)
+        this
+    }
+
 
     //request reply model
 
