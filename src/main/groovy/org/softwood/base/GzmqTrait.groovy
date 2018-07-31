@@ -558,7 +558,17 @@ trait GzmqTrait {
         this
     }
 
+    def then (param) {
 
+        assert param
+
+        Closure paramClosure
+        if (Closure.isInstance(param)) {
+            paramClosure = param.clone()
+            paramClosure.delegate = this //set Gzmq as delegate
+        }
+
+    }
     //request reply model
 
     def requestConnection (connectionAddress = "", Map options = [:],  Closure doWork=null) {
